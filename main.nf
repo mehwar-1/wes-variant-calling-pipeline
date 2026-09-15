@@ -6,6 +6,10 @@ params.reads  = "/home/mehwar1/test-datasets/testdata/dummy/normal/dummy_n_R{1,2
 params.outdir = "results"
 
 process FASTP {
+    cpus 2
+    memory '1 GB'
+    time '30m'
+
     tag "$sample_id"
     publishDir "${params.outdir}/fastp", mode: 'copy'
 
@@ -28,6 +32,10 @@ process FASTP {
 }
 
 process FASTQC {
+    cpus 1
+    memory '2 GB'
+    time '15m'
+
     tag "$sample_id"
     publishDir "${params.outdir}/fastqc", mode: 'copy'
 
