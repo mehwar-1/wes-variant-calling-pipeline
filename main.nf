@@ -10,6 +10,7 @@ params.dbsnp     = "${params.ref_dir}/dbsnp_146_hg38_chr20_tso-only.vcf.gz"
 params.mills     = "${params.ref_dir}/Mills_and_1000G_gold_standard_indels_hg38_chr20.vcf.gz"
 
 process FASTP {
+    container 'quay.io/biocontainers/fastp:0.23.2--h79da9fb_0'
     cpus 2
     memory '1 GB'
     time '30m'
@@ -36,6 +37,7 @@ process FASTP {
 }
 
 process FASTQC {
+    container 'quay.io/biocontainers/fastqc:0.11.9--0'
     cpus 1
     memory '2 GB'
     time '15m'
@@ -54,7 +56,29 @@ process FASTQC {
     fastqc ${reads}
     """
 }
+
 process BWA_ALIGN {
+    container 'quay.io/biocontainers/bwa:0.7.17--h5bf99c6_8'
+    containerOptions "-v ${params.ref_dir}:${params.ref_dir}"
+    cpus 2
+    memory '3 GB'
+    time '30m'
+    tag "$sample_id"
+
+    input:
+    tuple val(sample_id), path(reads)
+
+    output:
+    tuple val(sample_id), path("${sample_id}.sam")
+
+    script:
+    """
+    bwa mem -M -t ${task.cpus} -R "@RG\\tID:${sample_id}\\tSM:${sample_id}\\tPL:ILLUMINA\\tLB:${sample_id}" ${params.fasta} ${reads[0]} ${reads[1]} > ${sample_id}.sam
+    """
+}
+
+process SORT_INDEX {
+    container 'quay.io/biocontainers/samtools:1.19.2--h50ea8bc_1'
     cpus 2
     memory '3 GB'
     time '30m'
@@ -62,20 +86,21 @@ process BWA_ALIGN {
     publishDir "${params.outdir}/aligned", mode: 'copy'
 
     input:
-    tuple val(sample_id), path(reads)
+    tuple val(sample_id), path(sam)
 
     output:
     tuple val(sample_id), path("${sample_id}.sorted.bam"), path("${sample_id}.sorted.bam.bai")
 
     script:
     """
-    bwa mem -t ${task.cpus} -R "@RG\\tID:${sample_id}\\tSM:${sample_id}\\tPL:ILLUMINA\\tLB:${sample_id}" ${params.fasta} ${reads[0]} ${reads[1]} | \
-        samtools sort -@ ${task.cpus} -o ${sample_id}.sorted.bam
+    samtools sort -@ ${task.cpus} -o ${sample_id}.sorted.bam ${sam}
     samtools index ${sample_id}.sorted.bam
     """
 }
 
 process MARK_DUPLICATES {
+    container 'broadinstitute/gatk:4.7.0.0'
+    containerOptions "-v ${params.ref_dir}:${params.ref_dir}"
     cpus 2
     memory '3 GB'
     time '30m'
@@ -96,6 +121,8 @@ process MARK_DUPLICATES {
 }
 
 process BQSR {
+    container 'broadinstitute/gatk:4.7.0.0'
+    containerOptions "-v ${params.ref_dir}:${params.ref_dir}"
     cpus 2
     memory '3 GB'
     time '30m'
@@ -124,6 +151,8 @@ process BQSR {
 }
 
 process HAPLOTYPE_CALLER {
+    container 'broadinstitute/gatk:4.7.0.0'
+    containerOptions "-v ${params.ref_dir}:${params.ref_dir}"
     cpus 2
     memory '3500 MB'
     time '45m'
@@ -134,7 +163,7 @@ process HAPLOTYPE_CALLER {
     tuple val(sample_id), path(bam)
 
     output:
-    path "${sample_id}.vcf.gz"
+    tuple val(sample_id), path("${sample_id}.vcf.gz"), path("${sample_id}.vcf.gz.tbi")
 
     script:
     """
@@ -144,13 +173,43 @@ process HAPLOTYPE_CALLER {
     """
 }
 
+process VARIANT_FILTER {
+    container 'broadinstitute/gatk:4.7.0.0'
+    containerOptions "-v ${params.ref_dir}:${params.ref_dir}"
+    cpus 1
+    memory '2 GB'
+    time '15m'
+    tag "$sample_id"
+    publishDir "${params.outdir}/variants_filtered", mode: 'copy'
+
+    input:
+    tuple val(sample_id), path(vcf), path(tbi)
+
+    output:
+    tuple val(sample_id), path("${sample_id}.filtered.vcf.gz")
+
+    script:
+    """
+    gatk VariantFiltration \
+        -R ${params.fasta} \
+        -V ${vcf} \
+        --filter-expression "QD < 2.0" --filter-name "QD2" \
+        --filter-expression "FS > 60.0" --filter-name "FS60" \
+        --filter-expression "MQ < 40.0" --filter-name "MQ40" \
+        --filter-expression "SOR > 3.0" --filter-name "SOR3" \
+        -O ${sample_id}.filtered.vcf.gz
+    """
+}
+
 workflow {
     read_pairs_ch = Channel.fromFilePairs(params.reads)
 
     FASTP(read_pairs_ch)
     FASTQC(FASTP.out.trimmed_reads)
     BWA_ALIGN(FASTP.out.trimmed_reads)
-    MARK_DUPLICATES(BWA_ALIGN.out)
+    SORT_INDEX(BWA_ALIGN.out)
+    MARK_DUPLICATES(SORT_INDEX.out)
     BQSR(MARK_DUPLICATES.out)
     HAPLOTYPE_CALLER(BQSR.out)
+    VARIANT_FILTER(HAPLOTYPE_CALLER.out)
 }
