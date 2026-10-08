@@ -8,6 +8,7 @@ params.ref_dir   = "$projectDir/references/chr20_hg38"
 params.fasta     = "${params.ref_dir}/Homo_sapiens_assembly38_chr20.fasta"
 params.dbsnp     = "${params.ref_dir}/dbsnp_146_hg38_chr20_tso-only.vcf.gz"
 params.mills     = "${params.ref_dir}/Mills_and_1000G_gold_standard_indels_hg38_chr20.vcf.gz"
+params.intervals = "${params.ref_dir}/tso500_chr20_hg38.bed"
 
 process FASTP {
     container 'quay.io/biocontainers/fastp:0.23.2--h79da9fb_0'
@@ -139,6 +140,7 @@ process BQSR {
     """
     gatk BaseRecalibrator \
         -I ${bam} -R ${params.fasta} \
+        -L ${params.intervals} \
         --known-sites ${params.dbsnp} \
         --known-sites ${params.mills} \
         -O ${sample_id}.recal.table
@@ -169,6 +171,7 @@ process HAPLOTYPE_CALLER {
     """
     gatk HaplotypeCaller \
         -I ${bam} -R ${params.fasta} \
+        -L ${params.intervals} \
         -O ${sample_id}.vcf.gz
     """
 }
@@ -192,6 +195,7 @@ process VARIANT_FILTER {
     """
     gatk VariantFiltration \
         -R ${params.fasta} \
+        -L ${params.intervals} \
         -V ${vcf} \
         --filter-expression "QD < 2.0" --filter-name "QD2" \
         --filter-expression "FS > 60.0" --filter-name "FS60" \
